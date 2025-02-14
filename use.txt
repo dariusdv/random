@@ -1,0 +1,15 @@
+String email = "name1.name2-name3@example.com";
+List<String> variants = EmailCaseVariantGenerator.generateEmailCaseVariants(email);
+
+// Results:
+// name1.name2-name3@example.com
+// NAME1.NAME2-NAME3@example.com
+// Name1.Name2-Name3@example.com
+
+String email2 = "name1-name2.name3@test.app";
+List<String> variants2 = EmailCaseVariantGenerator.generateEmailCaseVariants(email2);
+
+// Results:
+// name1-name2.name3@test.app
+// NAME1-NAME2.NAME3@test.app
+// Name1-Name2.Name3@test.app
