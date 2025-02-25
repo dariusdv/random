@@ -1,0 +1,168 @@
+@echo off
+setlocal enabledelayedexpansion
+
+rem Get basic info
+for /f "tokens=*" %%a in ('git config user.email') do set USER_EMAIL=%%a
+for /f "tokens=*" %%a in ('git config user.name') do set USER_NAME=%%a
+for /f "tokens=*" %%a in ('git config --get remote.origin.url') do set REPO_URL=%%a
+
+rem Clean up the repo URL to get the base GitHub URL for commits
+set REPO_URL=!REPO_URL:.git=!
+if "!REPO_URL:~0,4!"=="git@" (
+    set REPO_URL=!REPO_URL:git@github.com:=https://github.com/!
+)
+if "!REPO_URL:~0,8!"=="https://" (
+    set BASE_URL=!REPO_URL!/commit/
+    set PR_BASE_URL=!REPO_URL!/pull/
+) else (
+    set BASE_URL=https://github.com/!REPO_URL!/commit/
+    set PR_BASE_URL=https://github.com/!REPO_URL!/pull/
+)
+
+rem Calculate date for 2 weeks ago (14 days)
+for /f "tokens=*" %%a in ('powershell -Command "[DateTime]::Now.AddDays(-14).ToString('yyyy-MM-dd')"') do set TWO_WEEKS_AGO=%%a
+
+set DATE_STAMP=%date:~-4,4%%date:~-7,2%%date:~-10,2%
+set HTML_FILE=commit_report_%DATE_STAMP%.html
+
+rem Create HTML header
+echo ^<!DOCTYPE html^> > %HTML_FILE%
+echo ^<html^>^<head^>^<title^>Commit Report^</title^> >> %HTML_FILE%
+echo ^<style^> >> %HTML_FILE%
+echo body{font-family:Segoe UI;margin:0;padding:20px} >> %HTML_FILE%
+echo .header{background:#0078d4;color:white;padding:15px;border-radius:5px 5px 0 0} >> %HTML_FILE%
+echo .content{padding:15px;border:1px solid #ddd;border-top:none;border-radius:0 0 5px 5px} >> %HTML_FILE%
+echo h2{color:#0078d4;border-bottom:1px solid #0078d4;padding-top:10px} >> %HTML_FILE%
+echo h3{color:#0078d4;margin-top:25px} >> %HTML_FILE%
+echo .commit{margin-bottom:15px;padding:10px;background:#f9f9f9;border-left:4px solid #0078d4} >> %HTML_FILE%
+echo .pr{margin-bottom:15px;padding:10px;background:#f0f7ff;border-left:4px solid #6cc644} >> %HTML_FILE%
+echo a{color:#0078d4;text-decoration:none} >> %HTML_FILE%
+echo a:hover{text-decoration:underline} >> %HTML_FILE%
+echo .commit-info{margin-bottom:6px;color:#555} >> %HTML_FILE%
+echo .date-section{background:#f5f5f5;padding:5px 10px;margin:10px 0;border-radius:3px;font-weight:bold} >> %HTML_FILE%
+echo .summary{margin-top:20px;padding:10px;background:#f0f7ff;border-radius:5px} >> %HTML_FILE%
+echo ^</style^>^</head^> >> %HTML_FILE%
+echo ^<body^>^<div class="header"^>^<h1^>Git Activity Report by %USER_NAME%^</h1^>^</div^> >> %HTML_FILE%
+echo ^<div class="content"^> >> %HTML_FILE%
+echo ^<p^>Report generated on %date% showing commits and PRs from the last two weeks^</p^> >> %HTML_FILE%
+
+rem Initialize counters
+set TOTAL_COMMITS=0
+set TOTAL_BRANCHES=0
+
+rem Get all branches
+git branch -r | findstr /v "HEAD" > branches_temp.txt
+
+rem Create the Commits section
+echo ^<h2^>Recent Commits^</h2^> >> %HTML_FILE%
+
+rem Process branches
+for /f "tokens=*" %%b in (branches_temp.txt) do (
+    set BRANCH=%%b
+    set BRANCH=!BRANCH:origin/=!
+    
+    rem Get user commits for this branch from the last 2 weeks
+    git log origin/!BRANCH! --author="%USER_EMAIL%" --since="%TWO_WEEKS_AGO%" --pretty=format:"%%h|%%s|%%ad|%%an" --date=short > commits_temp.txt
+    
+    rem Check if there are commits
+    set /p FIRST_LINE=<commits_temp.txt
+    if not "!FIRST_LINE!"=="" (
+        set /a TOTAL_BRANCHES+=1
+        echo ^<h3^>Branch: !BRANCH!^</h3^> >> %HTML_FILE%
+        
+        set CURRENT_DATE=
+        
+        rem Add commits
+        for /f "tokens=1-4 delims=|" %%d in (commits_temp.txt) do (
+            set /a TOTAL_COMMITS+=1
+            
+            rem Check if date changed to add date headers
+            if not "!CURRENT_DATE!"=="%%f" (
+                echo ^<div class="date-section"^>%%f^</div^> >> %HTML_FILE%
+                set CURRENT_DATE=%%f
+            )
+            
+            echo ^<div class="commit"^> >> %HTML_FILE%
+            echo ^<div class="commit-info"^>^<a href="%BASE_URL%%%d" target="_blank"^>%%d^</a^> - %%f by %%g^</div^> >> %HTML_FILE%
+            echo ^<div class="commit-message"^>^<strong^>%%e^</strong^>^</div^> >> %HTML_FILE%
+            echo ^</div^> >> %HTML_FILE%
+        )
+    )
+)
+
+rem Create Pull Requests section
+echo ^<h2^>Recent Pull Requests^</h2^> >> %HTML_FILE%
+
+rem Use git to get merged PRs (requires GitHub CLI if you want full details)
+if exist "C:\Program Files\GitHub CLI\gh.exe" (
+    rem If GitHub CLI is installed, get PRs with more details
+    "C:\Program Files\GitHub CLI\gh.exe" pr list --state merged --limit 50 --json number,title,mergedAt,author --jq ".[] | select(.mergedAt > \"%TWO_WEEKS_AGO%\") | \"%TWO_WEEKS_AGO%\nPR #\(.number)|\(.title)|\(.mergedAt | sub(\"T.*$\"; \"\"))|\(.author.login)\"" > prs_temp.txt
+) else (
+    rem Fallback to listing recent merged PRs from git
+    echo ^<p^>To show complete PR information, install GitHub CLI (gh)^</p^> >> %HTML_FILE%
+    git log --merges --since="%TWO_WEEKS_AGO%" --grep="Merge pull request" --pretty=format:"PR|%%s|%%ad|%%an" --date=short > prs_temp.txt
+)
+
+rem Check if there are PRs
+set /p PR_FIRST_LINE=<prs_temp.txt
+if not "!PR_FIRST_LINE!"=="" (
+    set TOTAL_PRS=0
+    
+    set PR_CURRENT_DATE=
+    
+    rem Process PRs - format depends on whether we're using GitHub CLI or git log
+    for /f "tokens=1-4 delims=|" %%p in (prs_temp.txt) do (
+        set /a TOTAL_PRS+=1
+        
+        rem Extract PR number and create link differently depending on source
+        if "%%p"=="PR" (
+            rem From git log - parse PR number from merge commit message
+            set PR_NUM=%%q
+            set PR_NUM=!PR_NUM:#=!
+            set PR_NUM=!PR_NUM:~0,5!
+            set PR_DATE=%%r
+            set PR_AUTHOR=%%s
+            set PR_TITLE=%%q
+        ) else (
+            rem From GitHub CLI - already formatted
+            set PR_NUM=%%p
+            set PR_NUM=!PR_NUM:PR #=!
+            set PR_TITLE=%%q
+            set PR_DATE=%%r
+            set PR_AUTHOR=%%s
+        )
+        
+        rem Check if date changed to add date headers
+        if not "!PR_CURRENT_DATE!"=="!PR_DATE!" (
+            echo ^<div class="date-section"^>!PR_DATE!^</div^> >> %HTML_FILE%
+            set PR_CURRENT_DATE=!PR_DATE!
+        )
+        
+        echo ^<div class="pr"^> >> %HTML_FILE%
+        echo ^<div class="commit-info"^>^<a href="%PR_BASE_URL%!PR_NUM!" target="_blank"^>PR #!PR_NUM!^</a^> - !PR_DATE! by !PR_AUTHOR!^</div^> >> %HTML_FILE%
+        echo ^<div class="commit-message"^>^<strong^>!PR_TITLE!^</strong^>^</div^> >> %HTML_FILE%
+        echo ^</div^> >> %HTML_FILE%
+    )
+    
+    rem Add PR summary
+    echo ^<div class="summary"^> >> %HTML_FILE%
+    echo ^<p^>^<strong^>Total Pull Requests:^</strong^> !TOTAL_PRS!^</p^> >> %HTML_FILE%
+    echo ^</div^> >> %HTML_FILE%
+) else (
+    echo ^<p^>No pull requests merged in the last two weeks.^</p^> >> %HTML_FILE%
+)
+
+rem Add commit summary
+echo ^<div class="summary"^> >> %HTML_FILE%
+echo ^<p^>^<strong^>Total Commits:^</strong^> %TOTAL_COMMITS% across %TOTAL_BRANCHES% branches^</p^> >> %HTML_FILE%
+echo ^</div^> >> %HTML_FILE%
+
+rem Close HTML
+echo ^</div^>^</body^>^</html^> >> %HTML_FILE%
+
+rem Clean up
+del branches_temp.txt 2>nul
+del commits_temp.txt 2>nul
+del prs_temp.txt 2>nul
+
+echo Report generated: %HTML_FILE%
