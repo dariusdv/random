@@ -26,31 +26,21 @@ rem Calculate date for 8 days ago
 for /f "tokens=*" %%a in ('powershell -Command "[DateTime]::Now.AddDays(-8).ToString('yyyy-MM-dd')"') do set EIGHT_DAYS_AGO=%%a
 
 set DATE_STAMP=%date:~-4,4%%date:~-7,2%%date:~-10,2%
-set HTML_FILE=activity_report_%DATE_STAMP%.html
+set EMAIL_FILE=activity_report_%DATE_STAMP%_email.html
 
-rem Create HTML header
-echo ^<!DOCTYPE html^> > %HTML_FILE%
-echo ^<html^>^<head^>^<title^>Activity Report - Last 8 Days^</title^> >> %HTML_FILE%
-echo ^<style^> >> %HTML_FILE%
-echo body{font-family:Segoe UI;margin:0;padding:20px} >> %HTML_FILE%
-echo .header{background:#0078d4;color:white;padding:15px;border-radius:5px 5px 0 0} >> %HTML_FILE%
-echo .content{padding:15px;border:1px solid #ddd;border-top:none;border-radius:0 0 5px 5px} >> %HTML_FILE%
-echo h2{color:#0078d4;border-bottom:1px solid #0078d4;padding-top:10px} >> %HTML_FILE%
-echo .commit{margin-bottom:15px;padding:10px;background:#f9f9f9;border-left:4px solid #0078d4} >> %HTML_FILE%
-echo .pr{margin-bottom:15px;padding:10px;background:#f0f7ff;border-left:4px solid #6cc644} >> %HTML_FILE%
-echo a{color:#0078d4;text-decoration:none} >> %HTML_FILE%
-echo a:hover{text-decoration:underline} >> %HTML_FILE%
-echo .commit-info{margin-bottom:6px;color:#555} >> %HTML_FILE%
-echo .summary{margin-top:20px;padding:10px;background:#f0f7ff;border-radius:5px} >> %HTML_FILE%
-echo .jira-link{display:inline-block;margin-right:8px;background:#f4f5f7;border-radius:3px;padding:2px 5px;border:1px solid #dfe1e6;font-size:12px} >> %HTML_FILE%
-echo .jira-link a{color:#0052cc} >> %HTML_FILE%
-echo ^</style^>^</head^> >> %HTML_FILE%
-echo ^<body^>^<div class="header"^>^<h1^>Git Activity Report by %USER_NAME%^</h1^>^</div^> >> %HTML_FILE%
-echo ^<div class="content"^> >> %HTML_FILE%
-echo ^<p^>Report generated on %date% showing unique commits and PRs from the last 8 days^</p^> >> %HTML_FILE%
+rem Create HTML file that is email-friendly
+echo ^<!DOCTYPE html^> > %EMAIL_FILE%
+echo ^<html^>^<head^>^<title^>Activity Report - Last 8 Days^</title^>^</head^> >> %EMAIL_FILE%
+echo ^<body style="font-family: 'Segoe UI', Arial, sans-serif; margin: 0; padding: 10px;"^> >> %EMAIL_FILE%
+
+rem Add the report title
+echo ^<div style="color: #333333; padding-bottom: 10px; margin-bottom: 15px; border-bottom: 1px solid #0078d4;"^> >> %EMAIL_FILE%
+echo ^<h2 style="color: #0078d4; margin-bottom: 5px;"^>Git Activity Report by %USER_NAME%^</h2^> >> %EMAIL_FILE%
+echo ^<p style="margin-top: 0; color: #555555;"^>Report generated on %date% showing unique commits and PRs from the last 8 days^</p^> >> %EMAIL_FILE%
+echo ^</div^> >> %EMAIL_FILE%
 
 rem Create the Commits section
-echo ^<h2^>Recent Commits^</h2^> >> %HTML_FILE%
+echo ^<h3 style="color: #0078d4; margin-top: 20px; margin-bottom: 10px;"^>Recent Commits^</h3^> >> %EMAIL_FILE%
 
 rem Get all unique commits from the last 8 days across all branches
 git log --all --author="%USER_EMAIL%" --since="%EIGHT_DAYS_AGO%" --pretty=format:"%%h|%%s|%%ad|%%an" --date=short > all_commits.txt
@@ -66,9 +56,9 @@ for /f "tokens=1-4 delims=|" %%d in (sorted_commits.txt) do (
     set /a TOTAL_COMMITS+=1
     set COMMIT_MSG=%%e
     
-    echo ^<div class="commit"^> >> %HTML_FILE%
-    echo ^<div class="commit-info"^>^<a href="%BASE_URL%%%d" target="_blank"^>%%d^</a^> - %%f by %%g^</div^> >> %HTML_FILE%
-    echo ^<div class="commit-message"^>^<strong^>%%e^</strong^>^</div^> >> %HTML_FILE%
+    echo ^<div style="margin-bottom: 15px; padding: 10px; background-color: #f9f9f9; border-left: 4px solid #0078d4;"^> >> %EMAIL_FILE%
+    echo ^<div style="margin-bottom: 6px; color: #555555;"^>^<a href="%BASE_URL%%%d" style="color: #0078d4; text-decoration: none;" target="_blank"^>%%d^</a^> - %%f by %%g^</div^> >> %EMAIL_FILE%
+    echo ^<div style="font-weight: bold;"^>%%e^</div^> >> %EMAIL_FILE%
     
     rem Check for Jira ticket references in commit message
     set "JIRA_REFS="
@@ -80,19 +70,19 @@ for /f "tokens=1-4 delims=|" %%d in (sorted_commits.txt) do (
     set "HAS_JIRA=0"
     for /f "tokens=*" %%j in (jira_tickets_temp.txt) do (
         set "HAS_JIRA=1"
-        set "JIRA_REFS=!JIRA_REFS!^<span class='jira-link'^>^<a href='%JIRA_URL%%%j' target='_blank'^>%%j^</a^>^</span^> "
+        set "JIRA_REFS=!JIRA_REFS!^<span style='display: inline-block; margin-right: 8px; background-color: #f4f5f7; border-radius: 3px; padding: 2px 5px; border: 1px solid #dfe1e6; font-size: 12px;'^>^<a href='%JIRA_URL%%%j' style='color: #0052cc; text-decoration: none;' target='_blank'^>%%j^</a^>^</span^> "
     )
     
     rem Add Jira links section if references were found
     if "!HAS_JIRA!"=="1" (
-        echo ^<div class="jira-references"^>Jira: !JIRA_REFS!^</div^> >> %HTML_FILE%
+        echo ^<div style="margin-top: 5px;"^>Jira: !JIRA_REFS!^</div^> >> %EMAIL_FILE%
     )
     
-    echo ^</div^> >> %HTML_FILE%
+    echo ^</div^> >> %EMAIL_FILE%
 )
 
 rem Create Pull Requests section
-echo ^<h2^>Recent Pull Requests^</h2^> >> %HTML_FILE%
+echo ^<h3 style="color: #0078d4; margin-top: 20px; margin-bottom: 10px;"^>Recent Pull Requests^</h3^> >> %EMAIL_FILE%
 
 rem Use git to get merged PRs (requires GitHub CLI if you want full details)
 if exist "C:\Program Files\GitHub CLI\gh.exe" (
@@ -100,7 +90,7 @@ if exist "C:\Program Files\GitHub CLI\gh.exe" (
     "C:\Program Files\GitHub CLI\gh.exe" pr list --state merged --limit 30 --json number,title,mergedAt,author --jq ".[] | select(.mergedAt > \"%EIGHT_DAYS_AGO%\") | \"PR #\(.number)|\(.title)|\(.mergedAt | sub(\"T.*$\"; \"\"))|\(.author.login)\"" > prs_temp.txt
 ) else (
     rem Fallback to listing recent merged PRs from git
-    echo ^<p^>To show complete PR information, install GitHub CLI (gh)^</p^> >> %HTML_FILE%
+    echo ^<p style="color: #666666; font-style: italic;"^>To show complete PR information, install GitHub CLI (gh)^</p^> >> %EMAIL_FILE%
     git log --merges --since="%EIGHT_DAYS_AGO%" --grep="Merge pull request" --pretty=format:"PR|%%s|%%ad|%%an" --date=short > prs_temp.txt
 )
 
@@ -134,9 +124,9 @@ if not "!PR_FIRST_LINE!"=="" (
             set PR_AUTHOR=%%s
         )
         
-        echo ^<div class="pr"^> >> %HTML_FILE%
-        echo ^<div class="commit-info"^>^<a href="%PR_BASE_URL%!PR_NUM!" target="_blank"^>PR #!PR_NUM!^</a^> - !PR_DATE! by !PR_AUTHOR!^</div^> >> %HTML_FILE%
-        echo ^<div class="commit-message"^>^<strong^>!PR_TITLE!^</strong^>^</div^> >> %HTML_FILE%
+        echo ^<div style="margin-bottom: 15px; padding: 10px; background-color: #f0f7ff; border-left: 4px solid #6cc644;"^> >> %EMAIL_FILE%
+        echo ^<div style="margin-bottom: 6px; color: #555555;"^>^<a href="%PR_BASE_URL%!PR_NUM!" style="color: #0078d4; text-decoration: none;" target="_blank"^>PR #!PR_NUM!^</a^> - !PR_DATE! by !PR_AUTHOR!^</div^> >> %EMAIL_FILE%
+        echo ^<div style="font-weight: bold;"^>!PR_TITLE!^</div^> >> %EMAIL_FILE%
         
         rem Check for Jira ticket references in PR title
         set "JIRA_REFS="
@@ -148,32 +138,30 @@ if not "!PR_FIRST_LINE!"=="" (
         set "HAS_JIRA=0"
         for /f "tokens=*" %%j in (jira_tickets_temp.txt) do (
             set "HAS_JIRA=1"
-            set "JIRA_REFS=!JIRA_REFS!^<span class='jira-link'^>^<a href='%JIRA_URL%%%j' target='_blank'^>%%j^</a^>^</span^> "
+            set "JIRA_REFS=!JIRA_REFS!^<span style='display: inline-block; margin-right: 8px; background-color: #f4f5f7; border-radius: 3px; padding: 2px 5px; border: 1px solid #dfe1e6; font-size: 12px;'^>^<a href='%JIRA_URL%%%j' style='color: #0052cc; text-decoration: none;' target='_blank'^>%%j^</a^>^</span^> "
         )
         
         rem Add Jira links section if references were found
         if "!HAS_JIRA!"=="1" (
-            echo ^<div class="jira-references"^>Jira: !JIRA_REFS!^</div^> >> %HTML_FILE%
+            echo ^<div style="margin-top: 5px;"^>Jira: !JIRA_REFS!^</div^> >> %EMAIL_FILE%
         )
         
-        echo ^</div^> >> %HTML_FILE%
+        echo ^</div^> >> %EMAIL_FILE%
     )
-    
-    rem Add PR summary
-    echo ^<div class="summary"^> >> %HTML_FILE%
-    echo ^<p^>^<strong^>Total Pull Requests:^</strong^> !TOTAL_PRS!^</p^> >> %HTML_FILE%
-    echo ^</div^> >> %HTML_FILE%
 ) else (
-    echo ^<p^>No pull requests merged in the last 8 days.^</p^> >> %HTML_FILE%
+    echo ^<p style="color: #666666;"^>No pull requests merged in the last 8 days.^</p^> >> %EMAIL_FILE%
 )
 
-rem Add commit summary
-echo ^<div class="summary"^> >> %HTML_FILE%
-echo ^<p^>^<strong^>Total Unique Commits:^</strong^> %TOTAL_COMMITS% in the last 8 days^</p^> >> %HTML_FILE%
-echo ^</div^> >> %HTML_FILE%
+rem Add summary section
+echo ^<div style="margin-top: 20px; padding: 10px; background-color: #f0f7ff; border-radius: 5px;"^> >> %EMAIL_FILE%
+if defined TOTAL_PRS (
+    echo ^<p style="margin: 5px 0;"^>^<strong^>Total Pull Requests:^</strong^> !TOTAL_PRS!^</p^> >> %EMAIL_FILE%
+)
+echo ^<p style="margin: 5px 0;"^>^<strong^>Total Unique Commits:^</strong^> %TOTAL_COMMITS% in the last 8 days^</p^> >> %EMAIL_FILE%
+echo ^</div^> >> %EMAIL_FILE%
 
 rem Close HTML
-echo ^</div^>^</body^>^</html^> >> %HTML_FILE%
+echo ^</body^>^</html^> >> %EMAIL_FILE%
 
 rem Clean up
 del all_commits.txt 2>nul
@@ -182,7 +170,10 @@ del prs_temp.txt 2>nul
 del sorted_prs.txt 2>nul
 del jira_tickets_temp.txt 2>nul
 
-echo Report generated: %HTML_FILE%
+echo Email-friendly report generated: %EMAIL_FILE%
 echo.
 echo Note: Please update the JIRA_URL variable with your actual Jira instance URL
 echo      Current setting: %JIRA_URL%
+echo.
+echo The file contains HTML that can be directly copied and pasted into Outlook.
+echo Make sure to set the email format to HTML for proper display.
