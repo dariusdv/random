@@ -26,35 +26,49 @@ rem Calculate date for 8 days ago
 for /f "tokens=*" %%a in ('powershell -Command "[DateTime]::Now.AddDays(-8).ToString('yyyy-MM-dd')"') do set EIGHT_DAYS_AGO=%%a
 
 set DATE_STAMP=%date:~-4,4%%date:~-7,2%%date:~-10,2%
-set EMAIL_FILE=activity_report_%DATE_STAMP%.txt
+set EMAIL_FILE=activity_report_%DATE_STAMP%.html
+
+rem Create HTML file header
+echo ^<!DOCTYPE html^> > %EMAIL_FILE%
+echo ^<html^> >> %EMAIL_FILE%
+echo ^<head^> >> %EMAIL_FILE%
+echo ^<title^>Git Activity Report^</title^> >> %EMAIL_FILE%
+echo ^<style^> >> %EMAIL_FILE%
+echo body { font-family: Arial, sans-serif; margin: 20px; } >> %EMAIL_FILE%
+echo h1, h2 { color: #333; } >> %EMAIL_FILE%
+echo .commit, .pr { margin-bottom: 15px; } >> %EMAIL_FILE%
+echo .commit-msg, .pr-title { margin: 5px 0; } >> %EMAIL_FILE%
+echo .jira-refs { margin-top: 5px; color: #0066cc; } >> %EMAIL_FILE%
+echo .summary { margin-top: 30px; border-top: 1px solid #ccc; padding-top: 10px; } >> %EMAIL_FILE%
+echo ^</style^> >> %EMAIL_FILE%
+echo ^</head^> >> %EMAIL_FILE%
+echo ^<body^> >> %EMAIL_FILE%
 
 rem Create email header
-echo Git Activity Report by %USER_NAME% > %EMAIL_FILE%
-echo. >> %EMAIL_FILE%
-echo Report generated on %date% showing unique commits and PRs from the last 8 days >> %EMAIL_FILE%
-echo. >> %EMAIL_FILE%
+echo ^<h1^>Git Activity Report by %USER_NAME%^</h1^> >> %EMAIL_FILE%
+echo ^<p^>Report generated on %date% showing unique commits and PRs from the last 8 days^</p^> >> %EMAIL_FILE%
 
 rem Create the Commits section
-echo RECENT COMMITS >> %EMAIL_FILE%
-echo ============== >> %EMAIL_FILE%
-echo. >> %EMAIL_FILE%
+echo ^<h2^>RECENT COMMITS^</h2^> >> %EMAIL_FILE%
 
 rem Get all unique commits from the last 8 days across all branches
-git log --all --author="%USER_EMAIL%" --since="%EIGHT_DAYS_AGO%" --pretty=format:"%%h|%%s|%%ad|%%an" --date=short > all_commits.txt
+rem Include Unix timestamp to ensure proper chronological sorting
+git log --all --author="%USER_EMAIL%" --since="%EIGHT_DAYS_AGO%" --pretty=format:"%%at|%%h|%%s|%%ad|%%an" --date=short > all_commits.txt
 
 rem Count unique commits
 set TOTAL_COMMITS=0
 
-rem Sort the commits by date
+rem Sort the commits by timestamp (most recent first)
 sort /r all_commits.txt > sorted_commits.txt
 
 rem Add commits
-for /f "tokens=1-4 delims=|" %%d in (sorted_commits.txt) do (
+for /f "tokens=1-5 delims=|" %%c in (sorted_commits.txt) do (
     set /a TOTAL_COMMITS+=1
     set COMMIT_MSG=%%e
     
-    echo ^<a href="%BASE_URL%%%d"^>%%d^</a^> - %%f by %%g >> %EMAIL_FILE%
-    echo %%e >> %EMAIL_FILE%
+    echo ^<div class="commit"^> >> %EMAIL_FILE%
+    echo ^<div^>^<a href="%BASE_URL%%%d"^>%%d^</a^> - %%f by %%g^</div^> >> %EMAIL_FILE%
+    echo ^<div class="commit-msg"^>%%e^</div^> >> %EMAIL_FILE%
     
     rem Check for Jira ticket references in commit message
     set "JIRA_REFS="
@@ -71,26 +85,24 @@ for /f "tokens=1-4 delims=|" %%d in (sorted_commits.txt) do (
     
     rem Add Jira links section if references were found
     if "!HAS_JIRA!"=="1" (
-        echo Jira: !JIRA_REFS! >> %EMAIL_FILE%
+        echo ^<div class="jira-refs"^>Jira: !JIRA_REFS!^</div^> >> %EMAIL_FILE%
     )
     
-    echo. >> %EMAIL_FILE%
+    echo ^</div^> >> %EMAIL_FILE%
 )
 
 rem Create Pull Requests section
-echo RECENT PULL REQUESTS >> %EMAIL_FILE%
-echo ===================== >> %EMAIL_FILE%
-echo. >> %EMAIL_FILE%
+echo ^<h2^>RECENT PULL REQUESTS^</h2^> >> %EMAIL_FILE%
 
 rem Use git to get merged PRs (requires GitHub CLI if you want full details)
 if exist "C:\Program Files\GitHub CLI\gh.exe" (
-    rem If GitHub CLI is installed, get PRs with more details
-    "C:\Program Files\GitHub CLI\gh.exe" pr list --state merged --limit 30 --json number,title,mergedAt,author --jq ".[] | select(.mergedAt > \"%EIGHT_DAYS_AGO%\") | \"PR #\(.number)|\(.title)|\(.mergedAt | sub(\"T.*$\"; \"\"))|\(.author.login)\"" > prs_temp.txt
+    rem If GitHub CLI is installed, get PRs with more details and include the raw timestamp for sorting
+    "C:\Program Files\GitHub CLI\gh.exe" pr list --state merged --limit 30 --json number,title,mergedAt,author --jq ".[] | select(.mergedAt > \"%EIGHT_DAYS_AGO%\") | (.mergedAt | sub(\"T.*$\"; \"\") | sub(\"-\"; \"\") | sub(\"-\"; \"\"))+\"|\"+\"PR #\(.number)|\(.title)|\(.mergedAt | sub(\"T.*$\"; \"\"))|\(.author.login)\"" > prs_temp.txt
 ) else (
     rem Fallback to listing recent merged PRs from git
-    echo To show complete PR information, install GitHub CLI (gh) >> %EMAIL_FILE%
-    echo. >> %EMAIL_FILE%
-    git log --merges --since="%EIGHT_DAYS_AGO%" --grep="Merge pull request" --pretty=format:"PR|%%s|%%ad|%%an" --date=short > prs_temp.txt
+    echo ^<p^>To show complete PR information, install GitHub CLI (gh)^</p^> >> %EMAIL_FILE%
+    rem Include timestamp for sorting
+    git log --merges --since="%EIGHT_DAYS_AGO%" --grep="Merge pull request" --pretty=format:"%%at|PR|%%s|%%ad|%%an" --date=short > prs_temp.txt
 )
 
 rem Check if there are PRs
@@ -98,11 +110,11 @@ set /p PR_FIRST_LINE=<prs_temp.txt
 if not "!PR_FIRST_LINE!"=="" (
     set TOTAL_PRS=0
     
-    rem Sort PRs by date
+    rem Sort PRs by timestamp (most recent first)
     sort /r prs_temp.txt > sorted_prs.txt
     
     rem Process PRs - format depends on whether we're using GitHub CLI or git log
-    for /f "tokens=1-4 delims=|" %%p in (sorted_prs.txt) do (
+    for /f "tokens=1-5 delims=|" %%o in (sorted_prs.txt) do (
         set /a TOTAL_PRS+=1
         
         rem Extract PR number and create link differently depending on source
@@ -123,8 +135,9 @@ if not "!PR_FIRST_LINE!"=="" (
             set PR_AUTHOR=%%s
         )
         
-        echo ^<a href="%PR_BASE_URL%!PR_NUM!"^>PR #!PR_NUM!^</a^> - !PR_DATE! by !PR_AUTHOR! >> %EMAIL_FILE%
-        echo !PR_TITLE! >> %EMAIL_FILE%
+        echo ^<div class="pr"^> >> %EMAIL_FILE%
+        echo ^<div^>^<a href="%PR_BASE_URL%!PR_NUM!"^>PR #!PR_NUM!^</a^> - !PR_DATE! by !PR_AUTHOR!^</div^> >> %EMAIL_FILE%
+        echo ^<div class="pr-title"^>!PR_TITLE!^</div^> >> %EMAIL_FILE%
         
         rem Check for Jira ticket references in PR title
         set "JIRA_REFS="
@@ -141,25 +154,29 @@ if not "!PR_FIRST_LINE!"=="" (
         
         rem Add Jira links section if references were found
         if "!HAS_JIRA!"=="1" (
-            echo Jira: !JIRA_REFS! >> %EMAIL_FILE%
+            echo ^<div class="jira-refs"^>Jira: !JIRA_REFS!^</div^> >> %EMAIL_FILE%
         )
         
-        echo. >> %EMAIL_FILE%
+        echo ^</div^> >> %EMAIL_FILE%
     )
     
-    rem Add PR summary
-    echo SUMMARY >> %EMAIL_FILE%
-    echo ======= >> %EMAIL_FILE%
-    echo. >> %EMAIL_FILE%
-    echo Total Pull Requests: !TOTAL_PRS! >> %EMAIL_FILE%
+    rem Add summary section
+    echo ^<div class="summary"^> >> %EMAIL_FILE%
+    echo ^<h2^>SUMMARY^</h2^> >> %EMAIL_FILE%
+    echo ^<p^>Total Pull Requests: !TOTAL_PRS!^</p^> >> %EMAIL_FILE%
+    echo ^<p^>Total Unique Commits: %TOTAL_COMMITS% in the last 8 days^</p^> >> %EMAIL_FILE%
+    echo ^</div^> >> %EMAIL_FILE%
 ) else (
-    echo No pull requests merged in the last 8 days. >> %EMAIL_FILE%
-    echo. >> %EMAIL_FILE%
+    echo ^<p^>No pull requests merged in the last 8 days.^</p^> >> %EMAIL_FILE%
+    echo ^<div class="summary"^> >> %EMAIL_FILE%
+    echo ^<h2^>SUMMARY^</h2^> >> %EMAIL_FILE%
+    echo ^<p^>Total Unique Commits: %TOTAL_COMMITS% in the last 8 days^</p^> >> %EMAIL_FILE%
+    echo ^</div^> >> %EMAIL_FILE%
 )
 
-rem Add commit summary
-echo Total Unique Commits: %TOTAL_COMMITS% in the last 8 days >> %EMAIL_FILE%
-echo. >> %EMAIL_FILE%
+rem Close HTML tags
+echo ^</body^> >> %EMAIL_FILE%
+echo ^</html^> >> %EMAIL_FILE%
 
 rem Clean up
 del all_commits.txt 2>nul
@@ -170,5 +187,8 @@ del jira_tickets_temp.txt 2>nul
 
 echo Report generated: %EMAIL_FILE%
 echo.
-echo Note: Please update the JIRA_URL variable with your actual Jira instance URL
-echo      Current setting: %JIRA_URL%
+echo Note: 
+echo 1. Open the HTML file in a browser and copy the formatted content into your Outlook email
+echo 2. Make sure your email format in Outlook is set to HTML (not plain text)
+echo 3. Please update the JIRA_URL variable with your actual Jira instance URL
+echo    Current setting: %JIRA_URL%
