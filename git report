@@ -36,9 +36,13 @@ echo ^<title^>Git Activity Report^</title^> >> %EMAIL_FILE%
 echo ^<style^> >> %EMAIL_FILE%
 echo body { font-family: Arial, sans-serif; margin: 20px; } >> %EMAIL_FILE%
 echo h1, h2 { color: #333; } >> %EMAIL_FILE%
-echo .commit, .pr { margin-bottom: 15px; } >> %EMAIL_FILE%
-echo .commit-msg, .pr-title { margin: 5px 0; } >> %EMAIL_FILE%
-echo .jira-refs { margin-top: 5px; color: #0066cc; } >> %EMAIL_FILE%
+echo table { width: 100%%; border-collapse: collapse; margin-bottom: 20px; } >> %EMAIL_FILE%
+echo th { background-color: #f2f2f2; text-align: left; padding: 8px; } >> %EMAIL_FILE%
+echo td { padding: 8px; vertical-align: top; border-bottom: 1px solid #ddd; } >> %EMAIL_FILE%
+echo .commit-msg { margin-bottom: 5px; } >> %EMAIL_FILE%
+echo .commit-author { font-size: 0.9em; color: #666; margin-bottom: 5px; } >> %EMAIL_FILE%
+echo .jira-refs { color: #0066cc; } >> %EMAIL_FILE%
+echo .commit-link { text-align: right; } >> %EMAIL_FILE%
 echo .summary { margin-top: 30px; border-top: 1px solid #ccc; padding-top: 10px; } >> %EMAIL_FILE%
 echo ^</style^> >> %EMAIL_FILE%
 echo ^</head^> >> %EMAIL_FILE%
@@ -51,9 +55,16 @@ echo ^<p^>Report generated on %date% showing unique commits and PRs from the las
 rem Create the Commits section
 echo ^<h2^>RECENT COMMITS^</h2^> >> %EMAIL_FILE%
 
+rem Start table for commits
+echo ^<table^> >> %EMAIL_FILE%
+echo ^<tr^>^<th style="width: 80%%"^>Commit Details^</th^>^<th style="width: 20%%"^>Link^</th^>^</tr^> >> %EMAIL_FILE%
+
 rem Get all unique commits from the last 8 days across all branches
-rem Include Unix timestamp to ensure proper chronological sorting
-git log --all --author="%USER_EMAIL%" --since="%EIGHT_DAYS_AGO%" --pretty=format:"%%at|%%h|%%s|%%ad|%%an" --date=short > all_commits.txt
+rem Include Unix timestamp to ensure proper chronological sorting with minutes precision
+git log --all --author="%USER_EMAIL%" --since="%EIGHT_DAYS_AGO%" --pretty=format:"%%at|%%h|%%s|%%ad|%%an" --date=format:"%%Y-%%m-%%d %%H:%%M" > all_commits.txt
+
+rem Display a debug message
+echo Debug: Starting to process commits... > debug.log
 
 rem Count unique commits
 set TOTAL_COMMITS=0
@@ -65,44 +76,111 @@ rem Add commits
 for /f "tokens=1-5 delims=|" %%c in (sorted_commits.txt) do (
     set /a TOTAL_COMMITS+=1
     set COMMIT_MSG=%%e
+    set IS_MERGE=0
     
-    echo ^<div class="commit"^> >> %EMAIL_FILE%
-    echo ^<div^>^<a href="%BASE_URL%%%d"^>%%d^</a^> - %%f by %%g^</div^> >> %EMAIL_FILE%
+    rem Check if this is a merge commit
+    echo %%e | findstr /C:"Merge" > nul
+    if not errorlevel 1 (
+        set IS_MERGE=1
+    )
+    
+    rem Start table row
+    echo ^<tr^> >> %EMAIL_FILE%
+    
+    rem Left cell with commit message and optional Jira refs
+    echo ^<td^> >> %EMAIL_FILE%
     echo ^<div class="commit-msg"^>%%e^</div^> >> %EMAIL_FILE%
     
-    rem Check for Jira ticket references in commit message
-    set "JIRA_REFS="
+    rem Calculate relative time
+    set COMMIT_TIME=%%f
+    set COMMIT_AUTHOR=%%g
     
-    rem Use temporary file to store the PowerShell output
-    powershell -Command "$message = '%%e'; [regex]::Matches($message, '[A-Z]+-\d+') | ForEach-Object { $_.Value } | Get-Unique" > jira_tickets_temp.txt
+    echo Debug: Processing commit time: !COMMIT_TIME! >> debug.log
     
-    rem Process each Jira ticket reference
-    set "HAS_JIRA=0"
-    for /f "tokens=*" %%j in (jira_tickets_temp.txt) do (
-        set "HAS_JIRA=1"
-        set "JIRA_REFS=!JIRA_REFS! ^<a href='%JIRA_URL%%%j'^>%%j^</a^>"
+    rem Use a hardcoded approach instead of complex calculations
+    set RELATIVE_TIME=recently
+    
+    rem Today's date for comparison
+    for /f "tokens=*" %%d in ('powershell -Command "Get-Date -Format 'yyyy-MM-dd'"') do set TODAY=%%d
+    set YESTERDAY=
+    for /f "tokens=*" %%d in ('powershell -Command "[DateTime]::Now.AddDays(-1).ToString('yyyy-MM-dd')"') do set YESTERDAY=%%d
+    
+    echo Debug: Today: !TODAY!, Yesterday: !YESTERDAY! >> debug.log
+    
+    rem Extract just the date part of the commit time (first 10 characters)
+    set COMMIT_DATE=!COMMIT_TIME:~0,10!
+    echo Debug: Commit date: !COMMIT_DATE! >> debug.log
+    
+    rem Simple date comparison
+    if "!COMMIT_DATE!"=="!TODAY!" (
+        set RELATIVE_TIME=today
+    ) else if "!COMMIT_DATE!"=="!YESTERDAY!" (
+        set RELATIVE_TIME=yesterday
+    ) else (
+        set /a DAYS_AGO=0
+        for /f "tokens=*" %%d in ('powershell -Command "$date1 = [DateTime]::ParseExact('!COMMIT_DATE!', 'yyyy-MM-dd', [System.Globalization.CultureInfo]::InvariantCulture); $date2 = [DateTime]::Now; $diff = $date2 - $date1; [Math]::Round($diff.TotalDays)"') do set DAYS_AGO=%%d
+        
+        if !DAYS_AGO! LSS 7 (
+            set RELATIVE_TIME=!DAYS_AGO! days ago
+        ) else (
+            set RELATIVE_TIME=last week
+        )
     )
     
-    rem Add Jira links section if references were found
-    if "!HAS_JIRA!"=="1" (
-        echo ^<div class="jira-refs"^>Jira: !JIRA_REFS!^</div^> >> %EMAIL_FILE%
+    echo Debug: Relative time: !RELATIVE_TIME! >> debug.log
+    
+    rem Add author and relative time
+    echo ^<div class="commit-author"^>!COMMIT_AUTHOR! committed !RELATIVE_TIME!^</div^> >> %EMAIL_FILE%
+    
+    rem Only show Jira links for non-merge commits
+    if "!IS_MERGE!"=="0" (
+        rem Check for Jira ticket references in commit message
+        set "JIRA_REFS="
+        
+        rem Use temporary file to store the PowerShell output
+        powershell -Command "$message = '%%e'; [regex]::Matches($message, '[A-Z]+-\d+') | ForEach-Object { $_.Value } | Get-Unique" > jira_tickets_temp.txt
+        
+        rem Process each Jira ticket reference
+        set "HAS_JIRA=0"
+        for /f "tokens=*" %%j in (jira_tickets_temp.txt) do (
+            set "HAS_JIRA=1"
+            set "JIRA_REFS=!JIRA_REFS! ^<a href='%JIRA_URL%%%j'^>%%j^</a^>"
+        )
+        
+        rem Add Jira links section if references were found
+        if "!HAS_JIRA!"=="1" (
+            echo ^<div class="jira-refs"^>Jira: !JIRA_REFS!^</div^> >> %EMAIL_FILE%
+        )
     )
     
-    echo ^</div^> >> %EMAIL_FILE%
+    echo ^</td^> >> %EMAIL_FILE%
+    
+    rem Right cell with commit link
+    echo ^<td class="commit-link"^>^<a href="%BASE_URL%%%d"^>%%d^</a^>^<br^>%%f^</td^> >> %EMAIL_FILE%
+    
+    rem End table row
+    echo ^</tr^> >> %EMAIL_FILE%
 )
+
+rem Close commits table
+echo ^</table^> >> %EMAIL_FILE%
 
 rem Create Pull Requests section
 echo ^<h2^>RECENT PULL REQUESTS^</h2^> >> %EMAIL_FILE%
 
+rem Start table for PRs
+echo ^<table^> >> %EMAIL_FILE%
+echo ^<tr^>^<th style="width: 80%%"^>PR Details^</th^>^<th style="width: 20%%"^>Link^</th^>^</tr^> >> %EMAIL_FILE%
+
 rem Use git to get merged PRs (requires GitHub CLI if you want full details)
 if exist "C:\Program Files\GitHub CLI\gh.exe" (
-    rem If GitHub CLI is installed, get PRs with more details and include the raw timestamp for sorting
-    "C:\Program Files\GitHub CLI\gh.exe" pr list --state merged --limit 30 --json number,title,mergedAt,author --jq ".[] | select(.mergedAt > \"%EIGHT_DAYS_AGO%\") | (.mergedAt | sub(\"T.*$\"; \"\") | sub(\"-\"; \"\") | sub(\"-\"; \"\"))+\"|\"+\"PR #\(.number)|\(.title)|\(.mergedAt | sub(\"T.*$\"; \"\"))|\(.author.login)\"" > prs_temp.txt
+    rem If GitHub CLI is installed, get PRs with more details and include timestamp with minutes for sorting
+    "C:\Program Files\GitHub CLI\gh.exe" pr list --state merged --limit 30 --json number,title,mergedAt,author --jq ".[] | select(.mergedAt > \"%EIGHT_DAYS_AGO%\") | (.mergedAt | sub(\"[TZ]\"; \" \") | sub(\"-\"; \"\") | sub(\"-\"; \"\") | sub(\":\"; \"\") | sub(\":\"; \"\"))+\"|\"+\"PR #\(.number)|\(.title)|\(.mergedAt | sub(\"T\"; \" \") | sub(\"Z\"; \"\"))|\(.author.login)\"" > prs_temp.txt
 ) else (
     rem Fallback to listing recent merged PRs from git
-    echo ^<p^>To show complete PR information, install GitHub CLI (gh)^</p^> >> %EMAIL_FILE%
-    rem Include timestamp for sorting
-    git log --merges --since="%EIGHT_DAYS_AGO%" --grep="Merge pull request" --pretty=format:"%%at|PR|%%s|%%ad|%%an" --date=short > prs_temp.txt
+    echo ^<tr^>^<td colspan="2"^>To show complete PR information, install GitHub CLI (gh)^</td^>^</tr^> >> %EMAIL_FILE%
+    rem Include timestamp with minutes for sorting
+    git log --merges --since="%EIGHT_DAYS_AGO%" --grep="Merge pull request" --pretty=format:"%%at|PR|%%s|%%ad|%%an" --date=format:"%%Y-%%m-%%d %%H:%%M" > prs_temp.txt
 )
 
 rem Check if there are PRs
@@ -121,8 +199,7 @@ if not "!PR_FIRST_LINE!"=="" (
         if "%%p"=="PR" (
             rem From git log - parse PR number from merge commit message
             set PR_NUM=%%q
-            set PR_NUM=!PR_NUM:#=!
-            set PR_NUM=!PR_NUM:~0,5!
+            for /f "tokens=4 delims=# " %%n in ("!PR_NUM!") do set PR_NUM=%%n
             set PR_DATE=%%r
             set PR_AUTHOR=%%s
             set PR_TITLE=%%q
@@ -135,9 +212,46 @@ if not "!PR_FIRST_LINE!"=="" (
             set PR_AUTHOR=%%s
         )
         
-        echo ^<div class="pr"^> >> %EMAIL_FILE%
-        echo ^<div^>^<a href="%PR_BASE_URL%!PR_NUM!"^>PR #!PR_NUM!^</a^> - !PR_DATE! by !PR_AUTHOR!^</div^> >> %EMAIL_FILE%
-        echo ^<div class="pr-title"^>!PR_TITLE!^</div^> >> %EMAIL_FILE%
+        rem Start table row
+        echo ^<tr^> >> %EMAIL_FILE%
+        
+        rem Left cell with PR title and optional Jira refs
+        echo ^<td^> >> %EMAIL_FILE%
+        echo ^<div class="commit-msg"^>!PR_TITLE!^</div^> >> %EMAIL_FILE%
+        
+        rem Calculate relative time for PR
+        set PR_DATE_ONLY=!PR_DATE!
+        set PR_AUTHOR_ONLY=!PR_AUTHOR!
+        
+        echo Debug: Processing PR date: !PR_DATE_ONLY! >> debug.log
+        
+        rem Use the same hardcoded approach for PRs
+        set PR_RELATIVE_TIME=recently
+        
+        rem Extract just the date part of the PR date (first 10 characters)
+        set PR_DATE_SHORT=!PR_DATE_ONLY:~0,10!
+        echo Debug: PR date short: !PR_DATE_SHORT! >> debug.log
+        
+        rem Simple date comparison
+        if "!PR_DATE_SHORT!"=="!TODAY!" (
+            set PR_RELATIVE_TIME=today
+        ) else if "!PR_DATE_SHORT!"=="!YESTERDAY!" (
+            set PR_RELATIVE_TIME=yesterday
+        ) else (
+            set /a PR_DAYS_AGO=0
+            for /f "tokens=*" %%d in ('powershell -Command "$date1 = [DateTime]::ParseExact('!PR_DATE_SHORT!', 'yyyy-MM-dd', [System.Globalization.CultureInfo]::InvariantCulture); $date2 = [DateTime]::Now; $diff = $date2 - $date1; [Math]::Round($diff.TotalDays)"') do set PR_DAYS_AGO=%%d
+            
+            if !PR_DAYS_AGO! LSS 7 (
+                set PR_RELATIVE_TIME=!PR_DAYS_AGO! days ago
+            ) else (
+                set PR_RELATIVE_TIME=last week
+            )
+        )
+        
+        echo Debug: PR relative time: !PR_RELATIVE_TIME! >> debug.log
+        
+        rem Add author and relative time
+        echo ^<div class="commit-author"^>!PR_AUTHOR_ONLY! merged !PR_RELATIVE_TIME!^</div^> >> %EMAIL_FILE%
         
         rem Check for Jira ticket references in PR title
         set "JIRA_REFS="
@@ -157,8 +271,17 @@ if not "!PR_FIRST_LINE!"=="" (
             echo ^<div class="jira-refs"^>Jira: !JIRA_REFS!^</div^> >> %EMAIL_FILE%
         )
         
-        echo ^</div^> >> %EMAIL_FILE%
+        echo ^</td^> >> %EMAIL_FILE%
+        
+        rem Right cell with PR link
+        echo ^<td class="commit-link"^>^<a href="%PR_BASE_URL%!PR_NUM!"^>PR #!PR_NUM!^</a^>^<br^>!PR_DATE!^<br^>by !PR_AUTHOR!^</td^> >> %EMAIL_FILE%
+        
+        rem End table row
+        echo ^</tr^> >> %EMAIL_FILE%
     )
+    
+    rem Close PR table
+    echo ^</table^> >> %EMAIL_FILE%
     
     rem Add summary section
     echo ^<div class="summary"^> >> %EMAIL_FILE%
@@ -167,7 +290,9 @@ if not "!PR_FIRST_LINE!"=="" (
     echo ^<p^>Total Unique Commits: %TOTAL_COMMITS% in the last 8 days^</p^> >> %EMAIL_FILE%
     echo ^</div^> >> %EMAIL_FILE%
 ) else (
-    echo ^<p^>No pull requests merged in the last 8 days.^</p^> >> %EMAIL_FILE%
+    echo ^<tr^>^<td colspan="2"^>No pull requests merged in the last 8 days.^</td^>^</tr^> >> %EMAIL_FILE%
+    echo ^</table^> >> %EMAIL_FILE%
+    
     echo ^<div class="summary"^> >> %EMAIL_FILE%
     echo ^<h2^>SUMMARY^</h2^> >> %EMAIL_FILE%
     echo ^<p^>Total Unique Commits: %TOTAL_COMMITS% in the last 8 days^</p^> >> %EMAIL_FILE%
@@ -188,7 +313,7 @@ del jira_tickets_temp.txt 2>nul
 echo Report generated: %EMAIL_FILE%
 echo.
 echo Note: 
-echo 1. Open the HTML file in a browser and copy the formatted content into your Outlook email
+echo 1. Open the HTML file in a browser and copy the formatted table content into your Outlook email
 echo 2. Make sure your email format in Outlook is set to HTML (not plain text)
 echo 3. Please update the JIRA_URL variable with your actual Jira instance URL
 echo    Current setting: %JIRA_URL%
